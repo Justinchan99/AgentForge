@@ -38,27 +38,9 @@ User -> Main Agent (current conversation model)
 
 Agent markdown uses OpenCode's project-local `.opencode/agents/` format. Worker model IDs are taken from the current OpenCode/Models.dev catalog rather than invented configuration fields.
 
-## Install
+## Linux deployment
 
-The CLI requires Python 3.9 or newer. Installers detect existing tools and install only missing components. API keys are never requested, printed, or written by AgentForge.
-
-### Windows local
-
-```powershell
-git clone <agentforge-repository>
-cd AgentForge
-.\install.ps1
-
-cd D:\path\to\project
-agentforge init
-agentforge verify
-```
-
-The installer uses winget for system tools and npm for OpenCode/pyright. It installs clangd only when the target project contains C/C++ and pyright only for Python.
-
-When running directly from the AgentForge source checkout before installation, use `./agentforge.cmd <command>` in PowerShell. The extensionless `./agentforge` file is the POSIX launcher for Linux and macOS shells.
-
-### Linux local
+The CLI requires Python 3.9 or newer. The installer detects existing tools and installs only missing components. API keys are never requested, printed, or written by AgentForge.
 
 ```sh
 git clone <agentforge-repository>
@@ -73,7 +55,7 @@ agentforge verify
 
 Ubuntu/Debian (`apt-get`) and Fedora-family (`dnf`) package managers are supported. Both x86_64 and ARM64 are detected; actual package availability remains distribution-specific.
 
-### Windows + Remote SSH Linux
+### Remote SSH Linux
 
 Install and run AgentForge in the remote Linux terminal where the source code lives:
 
@@ -187,15 +169,7 @@ This performs a CMake configure under `.agentforge/cmake-build` with `CMAKE_EXPO
 
 If a project already has a root `compile_commands.json`, AgentForge preserves and uses it.
 
-## Development and tests
-
-```powershell
-python -m unittest discover -s tests -v
-python scripts\agentforge.py init --dry-run
-python scripts\agentforge.py verify
-```
-
-See [architecture](docs/architecture.md), [Windows](docs/windows.md), [Linux](docs/linux.md), and [Remote SSH](docs/remote-ssh.md) for details.
+See [architecture](docs/architecture.md), [Linux](docs/linux.md), and [Remote SSH](docs/remote-ssh.md) for details.
 
 ## License
 

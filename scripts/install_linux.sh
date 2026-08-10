@@ -130,7 +130,7 @@ mkdir -p "$install_root" "$bin_root"
 source_path=$(CDPATH= cd -- "$SOURCE_ROOT" && pwd)
 install_path=$(CDPATH= cd -- "$install_root" && pwd)
 if [ "$source_path" != "$install_path" ]; then
-    for item in install.sh install.ps1 agentforge agentforge.cmd README.md LICENSE scripts templates examples docs; do
+    for item in install.sh agentforge README.md LICENSE scripts templates docs; do
         if [ -e "$SOURCE_ROOT/$item" ]; then
             cp -R "$SOURCE_ROOT/$item" "$install_root/"
         fi
