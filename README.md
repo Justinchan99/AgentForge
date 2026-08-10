@@ -199,6 +199,7 @@ If a project already has a root `compile_commands.json`, AgentForge preserves an
 python -m unittest discover -s tests -v
 python scripts\agentforge.py init --dry-run
 python scripts\agentforge.py verify
+python scripts\build_deploy.py path\to\deploy-output
 ```
 
 See [usage](docs/usage.md), [architecture](docs/architecture.md), [Windows](docs/windows.md), [Linux](docs/linux.md), and [Remote SSH](docs/remote-ssh.md) for details.

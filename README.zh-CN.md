@@ -199,6 +199,7 @@ agentforge prepare
 python -m unittest discover -s tests -v
 python scripts\agentforge.py init --dry-run
 python scripts\agentforge.py verify
+python scripts\build_deploy.py path\to\deploy-output
 ```
 
 更多信息请参阅[使用说明](docs/usage.zh-CN.md)、[架构说明](docs/architecture.md)、[Windows](docs/windows.md)、[Linux](docs/linux.md)和[Remote SSH](docs/remote-ssh.md)。
