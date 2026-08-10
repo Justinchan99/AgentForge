@@ -1,0 +1,13 @@
+# AgentForge-managed build outputs
+cmake-build/
+ros-build/
+ros-install/
+ros-log/
+compile_commands.json
+
+# Optional local AgentForge state that may contain secrets
+.env
+.env.*
+local.json
+secrets.json
+credentials.json

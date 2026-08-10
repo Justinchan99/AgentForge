@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# AGENTFORGE:BEGIN SECRETS
+*.agentforge.bak
+.agentforge/.env
+.agentforge/.env.*
+.agentforge/local.json
+.agentforge/secrets.json
+.agentforge/credentials.json
+# AGENTFORGE:END SECRETS

@@ -1,0 +1,5 @@
+# AgentForge-managed build outputs
+cmake-build/
+ros-build/
+ros-install/
+ros-log/
