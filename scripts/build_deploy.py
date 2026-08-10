@@ -173,11 +173,20 @@ def _clean_legacy_runtime() -> None:
     if legacy.parent != data_root or legacy.name != "agentforge":
         raise RuntimeError(f"Unsafe legacy runtime path: {legacy}")
     if legacy.is_symlink():
-        legacy.unlink()
-    elif legacy.is_dir():
-        shutil.rmtree(legacy)
-    elif legacy.exists():
-        legacy.unlink()
+        print(f"Preserved symbolic link at legacy runtime path: {legacy}", file=sys.stderr)
+        return
+    if not legacy.exists():
+        return
+    known_runtime = (
+        legacy.is_dir()
+        and (legacy / "scripts/agentforge.py").is_file()
+        and (legacy / "templates/agents.md").is_file()
+    )
+    if not known_runtime:
+        print(f"Preserved unrecognized legacy runtime path: {legacy}", file=sys.stderr)
+        return
+    shutil.rmtree(legacy)
+    print(f"Removed recognized legacy AgentForge runtime: {legacy}")
 
 
 def _install_artifact(source: Path) -> Path:
@@ -282,6 +291,11 @@ if [ "$python_ok" -eq 0 ]; then
         echo "No supported package manager found; install Python 3.9+ manually." >&2
         exit 1
     fi
+fi
+
+if ! command -v python3 >/dev/null 2>&1 || ! python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 9))'; then
+    echo "The available python3 is older than 3.9; install Python 3.9+ manually." >&2
+    exit 1
 fi
 
 exec python3 "$SCRIPT_DIR/agentforge" install "$@"
