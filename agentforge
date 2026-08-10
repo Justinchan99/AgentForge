@@ -1,4 +1,1567 @@
-#!/usr/bin/env sh
-set -eu
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-exec python3 "$SCRIPT_DIR/scripts/agentforge.py" "$@"
+#!/usr/bin/env python3
+"""Self-contained AgentForge Linux deployment artifact. Generated; do not edit."""
+
+from __future__ import annotations
+
+import sys
+import types
+from pathlib import Path
+
+EMBEDDED_TEMPLATES = {
+    'agentforge_gitignore': r'''# AgentForge-managed build outputs
+cmake-build/
+ros-build/
+ros-install/
+ros-log/
+compile_commands.json
+
+# Optional local AgentForge state that may contain secrets
+.env
+.env.*
+local.json
+secrets.json
+credentials.json
+''',
+    'agents.md': r'''<!-- AGENTFORGE:BEGIN -->
+# AgentForge Workflow
+
+## Architecture
+
+This project uses the AgentForge hierarchical multi-agent development workflow.
+
+Main Agent:
+
+- inherits the model used by the current OpenCode conversation
+- maintains conversation context and understands user requirements
+- owns reasoning, architecture, planning, and task decomposition
+- dispatches bounded execution tasks to worker agents
+- reviews worker results and makes final technical decisions
+
+Worker Agents:
+
+### deepseek-worker-free
+
+- Model: DeepSeek V4 Flash Free (`opencode/deepseek-v4-flash-free`)
+- Default low-cost execution worker
+- Use for code search, small changes, repetitive editing, builds, tests, logs, and simple debugging
+
+### deepseek-worker
+
+- Model: DeepSeek V4 Pro (`deepseek/deepseek-v4-pro`)
+- Optional; requires user-provided DeepSeek authentication
+- Use for multi-file implementation, complex changes, and larger debugging tasks
+
+## Dispatch Policy
+
+1. The Main Agent analyzes the task and keeps architecture and reasoning responsibilities.
+2. Delegate execution-heavy work to `deepseek-worker-free` when practical.
+3. Escalate to `deepseek-worker` only when the free worker is insufficient and DeepSeek is configured.
+4. Workers follow the approved plan and report architecture problems instead of deciding them independently.
+5. The Main Agent reviews all worker results before accepting changes.
+6. Run relevant build and tests before final handoff.
+
+## Development Tools
+
+- VS Code: IDE, Git, debugging, and Remote SSH
+- OpenCode: Main Agent conversation and worker orchestration
+- clangd: C/C++ language intelligence
+- pyright: Python language intelligence
+<!-- AGENTFORGE:END -->
+''',
+    'deepseek-worker-free.md': r'''---
+description: Low-cost execution worker for search, small edits, builds, tests, and log analysis
+mode: subagent
+model: opencode/deepseek-v4-flash-free
+permission:
+  edit: allow
+  bash: ask
+  task: deny
+  external_directory: deny
+---
+
+# DeepSeek Worker Free
+
+Execute the bounded task supplied by the Main Agent. Prefer focused code search, small modifications, repetitive edits, test creation, builds, tests, log analysis, and simple debugging.
+
+Follow the Main Agent's architecture and acceptance criteria. Do not broaden scope or make major architectural decisions. If the plan is flawed, requirements are ambiguous, or the task needs broader changes, stop and report the issue to the Main Agent.
+
+Never expose credentials, delete user files, discard unrelated work, commit, or push.
+''',
+    'deepseek-worker.md': r'''---
+description: DeepSeek API execution worker for multi-file implementation and complex debugging
+mode: subagent
+model: deepseek/deepseek-v4-pro
+permission:
+  edit: allow
+  bash: ask
+  task: deny
+  external_directory: deny
+---
+
+# DeepSeek Worker
+
+Execute the bounded implementation task supplied by the Main Agent. Handle multi-file changes, larger debugging tasks, and implementation based on an already-approved architecture.
+
+Do not change the overall architecture independently. Report plan defects, interface conflicts, or missing information to the Main Agent and wait for a decision.
+
+Use only OpenCode's authenticated DeepSeek provider. Never read, print, write, or persist API keys. Never delete user files, discard unrelated work, commit, or push.
+''',
+    'gitignore_secrets': r'''# AGENTFORGE:BEGIN SECRETS
+*.agentforge.bak
+.agentforge/.env
+.agentforge/.env.*
+.agentforge/local.json
+.agentforge/secrets.json
+.agentforge/credentials.json
+# AGENTFORGE:END SECRETS
+''',
+    'legacy_agents_existing_header_v1.md': r'''<!-- agentforge-workflow:v1 -->
+---
+
+AgentForge Workflow Added:
+
+This project follows the AgentForge AI collaborative development workflow.
+
+- Architect Agent: design and planning.
+- Developer Agent: implementation and testing.
+- Reviewer Agent: validation and optimization.
+- Tools: VS Code, OpenCode, and LSP.
+
+---
+''',
+    'legacy_agents_v1.md': r'''<!-- agentforge-workflow:v1 -->
+# AgentForge Workflow
+
+## Development Workflow
+
+This project uses the AgentForge AI collaborative development workflow.
+
+Architecture:
+
+- Architect Agent: requirement analysis, architecture design, and task decomposition.
+- Developer Agent: code implementation, file modification, build, and test.
+- Reviewer Agent: code review, risk analysis, and optimization suggestions.
+
+Development environment:
+
+- VS Code: IDE and project management.
+- OpenCode: AI agent execution platform.
+- LSP: code intelligence through clangd and pyright.
+
+Workflow:
+
+1. Architect Agent analyzes requirements and defines acceptance criteria.
+2. Developer Agent implements the scoped changes and runs checks.
+3. Reviewer Agent reviews correctness, risks, and maintainability.
+4. Run the relevant build and test commands before handoff.
+''',
+    'legacy_architect_v1.md': r'''---
+description: Analyze requirements, design architecture, and decompose work into verifiable tasks
+mode: primary
+permission:
+  edit: deny
+  bash: ask
+---
+
+# Architect Agent
+
+You are the system architect for this project.
+
+Analyze requirements, inspect the existing code and constraints, propose the smallest coherent design, split work into testable tasks, and give the Developer Agent clear acceptance criteria. Call out assumptions, compatibility risks, and migration concerns.
+
+Do not perform broad code modifications. Small documentation-only clarifications are acceptable when explicitly requested.
+''',
+    'legacy_developer_v1.md': r'''---
+description: Implement scoped changes and verify them with the project's build and tests
+mode: primary
+permission:
+  edit: allow
+  bash: ask
+---
+
+# Developer Agent
+
+You are the software development engineer for this project.
+
+Implement the approved task with focused file changes. Preserve existing interfaces unless the task requires otherwise. Run the relevant formatter, type checker, build, and tests, then report what was verified and what still needs environment or hardware validation.
+
+Never delete user files or discard unrelated work.
+''',
+    'legacy_reviewer_v1.md': r'''---
+description: Review changes for correctness, regressions, security, and maintainability without editing
+mode: subagent
+permission:
+  edit: deny
+  bash: ask
+---
+
+# Reviewer Agent
+
+You are the code review engineer for this project.
+
+Review the actual diff and relevant surrounding code. Prioritize correctness defects, regressions, security risks, missing tests, and operational hazards. Cite concrete files and evidence. Separate confirmed defects from suggestions.
+
+Do not modify files. If no material issue is found, say so and identify any remaining validation gap.
+''',
+    'main-agent.md': r'''# Main Agent
+
+The Main Agent is the model selected by the current OpenCode conversation. AgentForge intentionally does not pin a model for it.
+
+The Main Agent owns requirement understanding, context, reasoning, architecture, task decomposition, worker dispatch, result review, retries, and final technical decisions.
+
+Delegate low-risk execution work to `deepseek-worker-free` first. Escalate larger or more complex implementation to `deepseek-worker` only when it is configured. Workers execute the approved plan; they do not independently change the architecture.
+''',
+    'opencode.json': r'''{
+  "$schema": "https://opencode.ai/config.json",
+  "lsp": {
+    "clangd": {
+      "command": ["{{CLANGD}}", "--background-index", "--clang-tidy", "--compile-commands-dir={{COMPILE_COMMANDS_DIR}}"],
+      "extensions": [".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"]
+    },
+    "pyright": {
+      "command": ["{{PYRIGHT}}", "--stdio"],
+      "extensions": [".py", ".pyi"]
+    }
+  }
+}
+''',
+    'vscode_extensions.json': r'''{
+  "recommendations": [
+    "llvm-vs-code-extensions.vscode-clangd",
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "ms-vscode.cmake-tools",
+    "ms-vscode-remote.remote-ssh"
+  ]
+}
+''',
+    'vscode_settings.json': r'''{
+  "C_Cpp.intelliSenseEngine": "disabled",
+  "clangd.arguments": [
+    "--background-index",
+    "--clang-tidy",
+    "--compile-commands-dir={{COMPILE_COMMANDS_DIR}}"
+  ],
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.autoImportCompletions": true
+}
+''',
+}
+
+EMBEDDED_MODULES = {
+    'common': r'''"""Shared filesystem and configuration helpers for AgentForge."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import stat
+import tempfile
+from pathlib import Path
+from typing import Any, Iterable
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+TEMPLATE_ROOT = PROJECT_ROOT / "templates"
+WORKFLOW_BEGIN = "<!-- AGENTFORGE:BEGIN -->"
+WORKFLOW_END = "<!-- AGENTFORGE:END -->"
+LEGACY_WORKFLOW_MARKER = "<!-- agentforge-workflow:v1 -->"
+
+
+def command_path(*names: str) -> str | None:
+    """Return the first command found on PATH."""
+    for name in names:
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
+def load_json(path: Path) -> dict[str, Any]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must contain a JSON object")
+    return value
+
+
+def deep_add_missing(
+    current: dict[str, Any],
+    defaults: dict[str, Any],
+    conflicts: list[str] | None = None,
+    prefix: str = "",
+) -> bool:
+    """Add missing keys recursively without replacing any user value."""
+    changed = False
+    for key, value in defaults.items():
+        if key not in current:
+            current[key] = value
+            changed = True
+        elif isinstance(current[key], dict) and isinstance(value, dict):
+            changed = deep_add_missing(current[key], value, conflicts, f"{prefix}{key}.") or changed
+        elif current[key] != value and conflicts is not None:
+            conflicts.append(f"{prefix}{key}")
+    return changed
+
+
+def atomic_write_bytes(path: Path, content: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(content)
+        if path.exists():
+            os.chmod(temporary, stat.S_IMODE(path.stat().st_mode))
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def atomic_write_text(path: Path, content: str) -> None:
+    atomic_write_bytes(path, content.encode("utf-8"))
+
+
+def write_if_absent(path: Path, content: str, dry_run: bool = False) -> str:
+    if path.exists():
+        return "preserved"
+    if not dry_run:
+        atomic_write_text(path, content)
+    return "created"
+
+
+def ensure_text_block(path: Path, block: str, marker: str, dry_run: bool = False) -> str:
+    """Append one owned text block while preserving all existing bytes."""
+    encoded = block.rstrip().encode("utf-8") + b"\n"
+    if not path.exists():
+        if not dry_run:
+            atomic_write_bytes(path, encoded)
+        return "created"
+    try:
+        existing = path.read_bytes()
+        decoded = existing.decode("utf-8-sig")
+    except (OSError, UnicodeError):
+        return "preserved"
+    if marker in decoded:
+        return "unchanged"
+    separator = b"" if not existing or existing.endswith((b"\n", b"\r")) else b"\n"
+    if not dry_run:
+        atomic_write_bytes(path, existing + separator + b"\n" + encoded)
+    return "appended"
+
+
+def template_text(name: str) -> str:
+    return _EMBEDDED_TEMPLATES[name]
+
+
+def render_template(name: str, replacements: dict[str, str] | None = None) -> str:
+    content = template_text(name)
+    for key, value in (replacements or {}).items():
+        content = content.replace("{{" + key + "}}", value)
+    return content
+
+
+def merge_json_file(
+    destination: Path,
+    defaults: dict[str, Any],
+    dry_run: bool = False,
+) -> tuple[str, str | None]:
+    """Safely create or merge a JSON object, preserving all existing values."""
+    if not destination.exists():
+        if not dry_run:
+            atomic_write_text(destination, json.dumps(defaults, indent=2) + "\n")
+        return "created", None
+
+    try:
+        current = load_json(destination)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        return "preserved", f"Could not merge {destination}: {exc}"
+
+    conflicts: list[str] = []
+    changed = deep_add_missing(current, defaults, conflicts)
+    backup_created = False
+    if conflicts:
+        backup = destination.with_name(destination.name + ".agentforge.bak")
+        if not backup.exists() and not dry_run:
+            atomic_write_bytes(backup, destination.read_bytes())
+            backup_created = True
+    if not changed:
+        if backup_created:
+            return "preserved+backup", None
+        return "unchanged", None
+    if not dry_run:
+        atomic_write_text(destination, json.dumps(current, indent=2) + "\n")
+    return "merged+backup" if backup_created else "merged", None
+
+
+def format_changes(changes: Iterable[tuple[Path, str]]) -> list[str]:
+    return [f"{status:>9}  {path}" for path, status in changes]
+''',
+    'project_detection': r'''"""Project type and source-language detection."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+
+CPP_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"}
+PYTHON_SUFFIXES = {".py", ".pyi"}
+SKIP_DIRECTORIES = {
+    ".git",
+    ".agentforge",
+    ".opencode",
+    ".venv",
+    ".vscode",
+    "__pycache__",
+    "build",
+    "dist",
+    "install",
+    "log",
+    "node_modules",
+    "vendor",
+}
+
+
+@dataclass(frozen=True)
+class ProjectInfo:
+    root: str
+    languages: tuple[str, ...]
+    cmake: bool
+    ros2: bool
+    git: bool
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+def detect_project(project: Path) -> ProjectInfo:
+    project = project.resolve()
+    languages: set[str] = set()
+    cmake = (project / "CMakeLists.txt").is_file()
+    ros2 = (project / "package.xml").is_file()
+
+    for root, directories, files in os.walk(project):
+        directories[:] = [name for name in directories if name not in SKIP_DIRECTORIES]
+        if "CMakeLists.txt" in files:
+            cmake = True
+        if "package.xml" in files:
+            ros2 = True
+        for name in files:
+            suffix = Path(name).suffix.lower()
+            if suffix in CPP_SUFFIXES:
+                languages.add("cpp")
+            elif suffix in PYTHON_SUFFIXES:
+                languages.add("python")
+        if languages == {"cpp", "python"} and cmake and ros2:
+            break
+
+    return ProjectInfo(
+        root=str(project),
+        languages=tuple(sorted(languages)),
+        cmake=cmake,
+        ros2=ros2,
+        git=(project / ".git").exists(),
+    )
+''',
+    'detect_env': r'''#!/usr/bin/env python3
+"""Detect the host mode, architecture, privileges, and development tools."""
+
+from __future__ import annotations
+
+import argparse
+import ctypes
+import json
+import os
+import platform
+import sys
+from dataclasses import asdict, dataclass
+
+from common import command_path
+
+
+TOOL_COMMANDS: dict[str, tuple[str, ...]] = {
+    "git": ("git",),
+    "node": ("node",),
+    "npm": ("npm", "npm.cmd"),
+    "cmake": ("cmake",),
+    "ninja": ("ninja",),
+    "clangd": ("clangd", "clangd.exe"),
+    "pyright": ("pyright-langserver", "pyright-langserver.cmd", "pyright", "pyright.cmd"),
+    "opencode": ("opencode", "opencode.exe", "opencode.cmd"),
+    "vscode": ("code", "code.cmd"),
+    "colcon": ("colcon",),
+}
+
+
+@dataclass(frozen=True)
+class Environment:
+    os: str
+    os_version: str
+    architecture: str
+    mode: str
+    elevated: bool
+    tools: dict[str, str | None]
+
+
+def is_elevated() -> bool:
+    if os.name == "nt":
+        try:
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except (AttributeError, OSError):
+            return False
+    return hasattr(os, "geteuid") and os.geteuid() == 0
+
+
+def detect_mode() -> str:
+    if platform.system() == "Windows":
+        return "Windows Local Development"
+    if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_CLIENT"):
+        return "Windows + SSH Remote Linux"
+    return "Linux Local Development"
+
+
+def detect_environment() -> Environment:
+    system = platform.system() or "Unknown"
+    return Environment(
+        os=system,
+        os_version=platform.platform(),
+        architecture=platform.machine() or "unknown",
+        mode=detect_mode(),
+        elevated=is_elevated(),
+        tools={name: command_path(*commands) for name, commands in TOOL_COMMANDS.items()},
+    )
+
+
+def print_report(environment: Environment) -> None:
+    print("AgentForge Environment Check")
+    print(f"OS:           {environment.os_version}")
+    print(f"Architecture: {environment.architecture}")
+    print(f"Mode:         {environment.mode}")
+    print(f"Elevated:     {'yes' if environment.elevated else 'no'}")
+    print("\nInstalled:")
+    for name, path in environment.tools.items():
+        if path:
+            print(f"  [OK] {name:<10} {path}")
+    print("\nMissing:")
+    missing = [name for name, path in environment.tools.items() if not path]
+    if missing:
+        for name in missing:
+            print(f"  [--] {name}")
+    else:
+        print("  none")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--json", action="store_true", help="print machine-readable JSON")
+    args = parser.parse_args(argv)
+    environment = detect_environment()
+    if args.json:
+        print(json.dumps(asdict(environment), indent=2))
+    else:
+        print_report(environment)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+''',
+    'configure_agents': r'''#!/usr/bin/env python3
+"""Configure the hierarchical AgentForge workflow and OpenCode workers."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+from common import (
+    LEGACY_WORKFLOW_MARKER,
+    WORKFLOW_BEGIN,
+    WORKFLOW_END,
+    atomic_write_bytes,
+    command_path,
+    ensure_text_block,
+    format_changes,
+    template_text,
+    write_if_absent,
+)
+
+
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def deepseek_auth_source() -> str | None:
+    if os.environ.get("DEEPSEEK_API_KEY", "").strip():
+        return "DEEPSEEK_API_KEY"
+    opencode = command_path("opencode", "opencode.cmd", "opencode.exe")
+    if not opencode:
+        return None
+    try:
+        completed = subprocess.run(
+            [opencode, "auth", "list"],
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    output = ANSI_ESCAPE.sub("", (completed.stdout + completed.stderr).decode("utf-8", errors="replace"))
+    return "OpenCode auth" if completed.returncode == 0 and re.search(r"\bDeepSeek\b", output, re.I) else None
+
+
+def _replace_owned_workflow(existing: bytes, block: bytes) -> tuple[bytes, str, str | None]:
+    bom = b"\xef\xbb\xbf" if existing.startswith(b"\xef\xbb\xbf") else b""
+    body = existing[len(bom) :]
+    begin = WORKFLOW_BEGIN.encode("ascii")
+    end = WORKFLOW_END.encode("ascii")
+    start = body.find(begin)
+    if start >= 0:
+        finish = body.find(end, start + len(begin))
+        if finish < 0:
+            return existing, "preserved", "AGENTS.md contains AGENTFORGE:BEGIN without AGENTFORGE:END"
+        finish += len(end)
+        replacement = body[:start] + block + body[finish:]
+        status = "unchanged" if replacement == body else "updated"
+        return bom + replacement, status, None
+
+    legacy_full = template_text("legacy_agents_v1.md").encode("utf-8")
+    legacy_header = template_text("legacy_agents_existing_header_v1.md").rstrip().encode("utf-8")
+    normalized_body = body.decode("utf-8").replace("\r\n", "\n")
+    normalized_legacy = legacy_full.decode("utf-8").replace("\r\n", "\n")
+    if normalized_body == normalized_legacy:
+        return bom + block + b"\n", "migrated", None
+    if body.startswith(legacy_header):
+        remainder = body[len(legacy_header) :].lstrip(b"\r\n")
+        return bom + block + b"\n\n" + remainder, "migrated", None
+    if LEGACY_WORKFLOW_MARKER.encode("ascii") in body:
+        return bom + block + b"\n\n" + body, "prepended", "Unrecognized legacy AgentForge block was preserved"
+    return bom + block + b"\n\n" + body, "prepended", None
+
+
+def _retire_legacy_agents(project: Path, dry_run: bool) -> list[tuple[Path, str]]:
+    changes: list[tuple[Path, str]] = []
+    for role in ("architect", "developer", "reviewer"):
+        destination = project / ".opencode/agents" / f"{role}.md"
+        if not destination.is_file():
+            continue
+        try:
+            current = destination.read_text(encoding="utf-8").replace("\r\n", "\n")
+        except (OSError, UnicodeError):
+            changes.append((destination, "preserved-legacy"))
+            continue
+        legacy = template_text(f"legacy_{role}_v1.md").replace("\r\n", "\n")
+        retired = legacy.replace("mode: primary\n", "mode: primary\ndisable: true\n", 1)
+        retired = retired.replace("mode: subagent\n", "mode: subagent\ndisable: true\n", 1)
+        if current == retired:
+            changes.append((destination, "retired-legacy"))
+            continue
+        if current != legacy:
+            changes.append((destination, "preserved-legacy"))
+            continue
+        if not dry_run:
+            atomic_write_bytes(destination, retired.encode("utf-8"))
+        changes.append((destination, "retired-legacy"))
+    return changes
+
+
+def _configure_api_worker(path: Path, auth_source: str | None, dry_run: bool) -> str:
+    enabled = template_text("deepseek-worker.md")
+    disabled = enabled.replace("mode: subagent\n", "mode: subagent\ndisable: true\n", 1)
+    if not path.exists():
+        if not auth_source:
+            return "optional-unavailable"
+        return write_if_absent(path, enabled, dry_run)
+    try:
+        current = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    except (OSError, UnicodeError):
+        return "preserved-unavailable" if not auth_source else "preserved"
+    enabled_normalized = enabled.replace("\r\n", "\n")
+    disabled_normalized = disabled.replace("\r\n", "\n")
+    if auth_source and current == disabled_normalized:
+        if not dry_run:
+            atomic_write_bytes(path, enabled.encode("utf-8"))
+        return "enabled"
+    if not auth_source and current == enabled_normalized:
+        if not dry_run:
+            atomic_write_bytes(path, disabled.encode("utf-8"))
+        return "disabled-unavailable"
+    if not auth_source and current == disabled_normalized:
+        return "optional-unavailable"
+    return "preserved" if auth_source else "preserved-unavailable"
+
+
+def configure_agents(
+    project: Path,
+    dry_run: bool = False,
+    deepseek_configured: bool | None = None,
+) -> tuple[list[tuple[Path, str]], list[str], str | None]:
+    project = project.resolve()
+    changes: list[tuple[Path, str]] = []
+    warnings: list[str] = []
+
+    agents_path = project / "AGENTS.md"
+    full_block = template_text("agents.md")
+    existing_block = full_block.rstrip().encode("utf-8")
+    if not agents_path.exists():
+        status = write_if_absent(agents_path, full_block, dry_run)
+    else:
+        try:
+            existing = agents_path.read_bytes()
+            existing.decode("utf-8-sig")
+        except (OSError, UnicodeError) as exc:
+            status = "preserved"
+            warnings.append(f"Could not safely update {agents_path}: {exc}")
+        else:
+            updated, status, warning = _replace_owned_workflow(existing, existing_block)
+            if warning:
+                warnings.append(warning)
+            if updated != existing and not dry_run:
+                atomic_write_bytes(agents_path, updated)
+    changes.append((agents_path, status))
+
+    portable_roles = ("main-agent.md", "deepseek-worker-free.md", "deepseek-worker.md")
+    for role in portable_roles:
+        destination = project / ".agentforge" / role
+        changes.append((destination, write_if_absent(destination, template_text(role), dry_run)))
+
+    free_worker = project / ".opencode/agents/deepseek-worker-free.md"
+    changes.append((free_worker, write_if_absent(free_worker, template_text("deepseek-worker-free.md"), dry_run)))
+
+    auth_source = deepseek_auth_source() if deepseek_configured is None else ("test" if deepseek_configured else None)
+    api_worker = project / ".opencode/agents/deepseek-worker.md"
+    changes.append((api_worker, _configure_api_worker(api_worker, auth_source, dry_run)))
+
+    managed_ignore = project / ".agentforge/.gitignore"
+    changes.append((managed_ignore, write_if_absent(managed_ignore, template_text("agentforge_gitignore"), dry_run)))
+    root_ignore = project / ".gitignore"
+    ignore_status = ensure_text_block(root_ignore, template_text("gitignore_secrets"), "# AGENTFORGE:BEGIN SECRETS", dry_run)
+    changes.append((root_ignore, ignore_status))
+    changes.extend(_retire_legacy_agents(project, dry_run))
+    return changes, warnings, auth_source
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("project", nargs="?", default=".")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args(argv)
+    changes, warnings, auth_source = configure_agents(Path(args.project), args.dry_run)
+    print("\n".join(format_changes(changes)))
+    print(f"DeepSeek API worker: {'configured via ' + auth_source if auth_source else 'optional / not configured'}")
+    for warning in warnings:
+        print(f"WARNING: {warning}", file=sys.stderr)
+    return 1 if warnings else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+''',
+    'configure_lsp': r'''#!/usr/bin/env python3
+"""Safely configure OpenCode and VS Code language intelligence."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+from common import atomic_write_bytes, atomic_write_text, format_changes, load_json, merge_json_file, render_template
+from project_detection import detect_project
+
+
+def _render_json(name: str, replacements: dict[str, str] | None = None) -> dict:
+    value = json.loads(render_template(name, replacements))
+    if not isinstance(value, dict):
+        raise ValueError(f"Template {name} must contain a JSON object")
+    return value
+
+
+def _merge_or_migrate(
+    destination: Path,
+    defaults: dict,
+    legacy: dict,
+    dry_run: bool,
+) -> tuple[str, str | None]:
+    if destination.exists():
+        try:
+            current = load_json(destination)
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+            pass
+        else:
+            if current == legacy and current != defaults:
+                backup = destination.with_name(destination.name + ".agentforge.bak")
+                if not dry_run:
+                    if not backup.exists():
+                        atomic_write_bytes(backup, destination.read_bytes())
+                    atomic_write_text(destination, json.dumps(defaults, indent=2) + "\n")
+                return "migrated", None
+    return merge_json_file(destination, defaults, dry_run)
+
+
+def configure_lsp(
+    project: Path,
+    dry_run: bool = False,
+    languages: tuple[str, ...] | None = None,
+) -> tuple[list[tuple[Path, str]], list[str]]:
+    project = project.resolve()
+    languages = languages if languages is not None else detect_project(project).languages
+    clangd = "clangd.exe" if os.name == "nt" else "clangd"
+    pyright = "pyright-langserver.cmd" if os.name == "nt" else "pyright-langserver"
+    compile_dir = "." if (project / "compile_commands.json").is_file() else ".agentforge"
+    replacements = {"CLANGD": clangd, "PYRIGHT": pyright, "COMPILE_COMMANDS_DIR": compile_dir}
+    opencode = _render_json("opencode.json", replacements)
+    settings = _render_json("vscode_settings.json", replacements)
+    extensions = _render_json("vscode_extensions.json")
+    legacy_opencode = json.loads(json.dumps(opencode))
+    legacy_settings = json.loads(json.dumps(settings))
+    legacy_extensions = json.loads(json.dumps(extensions))
+
+    if "cpp" not in languages:
+        opencode["lsp"].pop("clangd", None)
+        settings.pop("C_Cpp.intelliSenseEngine", None)
+        settings.pop("clangd.arguments", None)
+        extensions["recommendations"] = [
+            item for item in extensions["recommendations"] if item not in {"llvm-vs-code-extensions.vscode-clangd", "ms-vscode.cmake-tools"}
+        ]
+    if "python" not in languages:
+        opencode["lsp"].pop("pyright", None)
+        settings.pop("python.analysis.typeCheckingMode", None)
+        settings.pop("python.analysis.autoImportCompletions", None)
+        extensions["recommendations"] = [
+            item for item in extensions["recommendations"] if item not in {"ms-python.python", "ms-python.vscode-pylance"}
+        ]
+    if not opencode["lsp"]:
+        opencode.pop("lsp")
+
+    changes: list[tuple[Path, str]] = []
+    warnings: list[str] = []
+    for destination, defaults, legacy in (
+        (project / ".opencode/opencode.json", opencode, legacy_opencode),
+        (project / ".vscode/settings.json", settings, legacy_settings),
+        (project / ".vscode/extensions.json", extensions, legacy_extensions),
+    ):
+        status, warning = _merge_or_migrate(destination, defaults, legacy, dry_run)
+        changes.append((destination, status))
+        if warning:
+            warnings.append(warning)
+    return changes, warnings
+
+
+def migrate_legacy_global_lsp(dry_run: bool = False) -> tuple[list[tuple[Path, str]], list[str]]:
+    clangd = "clangd.exe" if os.name == "nt" else "clangd"
+    pyright = "pyright-langserver.cmd" if os.name == "nt" else "pyright-langserver"
+    legacy = _render_json(
+        "opencode.json",
+        {"CLANGD": clangd, "PYRIGHT": pyright, "COMPILE_COMMANDS_DIR": ".agentforge"},
+    )
+    config_root = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    destination = config_root / "opencode/opencode.json"
+    if not destination.is_file():
+        return [(destination, "not-applicable")], []
+    try:
+        current = load_json(destination)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        return [(destination, "preserved")], [f"Could not inspect legacy global config: {exc}"]
+    if current == {"$schema": "https://opencode.ai/config.json"}:
+        return [(destination, "already-migrated")], []
+    if current != legacy:
+        return [(destination, "preserved-user-config")], []
+    backup = destination.with_name(destination.name + ".agentforge.bak")
+    if not dry_run:
+        if not backup.exists():
+            atomic_write_bytes(backup, destination.read_bytes())
+        atomic_write_text(destination, json.dumps({"$schema": "https://opencode.ai/config.json"}, indent=2) + "\n")
+    return [(destination, "migrated-legacy")], []
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("project", nargs="?", default=".")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--migrate-global", action="store_true", help="retire only the exact legacy AgentForge global LSP config")
+    args = parser.parse_args(argv)
+    if args.migrate_global:
+        changes, warnings = migrate_legacy_global_lsp(args.dry_run)
+    else:
+        changes, warnings = configure_lsp(Path(args.project), args.dry_run)
+    print("\n".join(format_changes(changes)))
+    for warning in warnings:
+        print(f"WARNING: {warning}", file=sys.stderr)
+    return 1 if warnings else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+''',
+    'adapt_project': r'''#!/usr/bin/env python3
+"""Generate compilation databases for CMake and ROS 2 projects."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+from common import atomic_write_text, command_path
+
+
+@dataclass(frozen=True)
+class AdaptResult:
+    kind: str
+    status: str
+    command: tuple[str, ...] = ()
+    message: str = ""
+
+
+def project_kind(project: Path) -> str:
+    if (project / "package.xml").is_file():
+        return "ros2"
+    if (project / "CMakeLists.txt").is_file():
+        return "cmake"
+    return "none"
+
+
+def build_command(project: Path) -> tuple[str, ...] | None:
+    kind = project_kind(project)
+    if kind == "ros2":
+        if not command_path("colcon"):
+            return None
+        managed = project / ".agentforge"
+        return (
+            "colcon",
+            "--log-base",
+            str(managed / "ros-log"),
+            "build",
+            "--build-base",
+            str(managed / "ros-build"),
+            "--install-base",
+            str(managed / "ros-install"),
+            "--cmake-args",
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+        )
+    if kind == "cmake":
+        if not command_path("cmake"):
+            return None
+        return (
+            "cmake",
+            "-S",
+            str(project),
+            "-B",
+            str(project / ".agentforge/cmake-build"),
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+        )
+    return ()
+
+
+def collect_compile_commands(project: Path, kind: str) -> int:
+    """Create one clangd-visible database from managed CMake/colcon outputs."""
+    managed = project / ".agentforge"
+    if kind == "cmake":
+        sources = [managed / "cmake-build/compile_commands.json"]
+    elif kind == "ros2":
+        sources = sorted((managed / "ros-build").glob("*/compile_commands.json"))
+    else:
+        return 0
+
+    entries: list[dict] = []
+    for source in sources:
+        if not source.is_file():
+            continue
+        try:
+            value = json.loads(source.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        if isinstance(value, list):
+            entries.extend(item for item in value if isinstance(item, dict))
+    if entries:
+        atomic_write_text(managed / "compile_commands.json", json.dumps(entries, indent=2) + "\n")
+    return len(entries)
+
+
+def adapt_project(project: Path, dry_run: bool = False) -> AdaptResult:
+    project = project.resolve()
+    kind = project_kind(project)
+    if (project / "compile_commands.json").is_file():
+        return AdaptResult(kind, "ready", message="project compile_commands.json already exists")
+    command = build_command(project)
+    if command == ():
+        return AdaptResult(kind, "not-applicable", message="No CMakeLists.txt or package.xml found")
+    if command is None:
+        tool = "colcon" if kind == "ros2" else "cmake"
+        return AdaptResult(kind, "skipped", message=f"{tool} is not available")
+    if dry_run:
+        return AdaptResult(kind, "planned", command)
+
+    environment = os.environ.copy()
+    cache = project / ".agentforge/cmake-build/CMakeCache.txt"
+    if kind == "cmake" and command_path("ninja") and not cache.exists():
+        command = command + ("-G", "Ninja")
+    completed = subprocess.run(command, cwd=project, env=environment, check=False)
+    if completed.returncode:
+        return AdaptResult(kind, "failed", command, f"build configuration exited with {completed.returncode}")
+    entries = collect_compile_commands(project, kind)
+    message = f"wrote {entries} compile command entries" if entries else "no compile commands were produced"
+    return AdaptResult(kind, "configured", command, message)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("project", nargs="?", default=".")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args(argv)
+    result = adapt_project(Path(args.project), args.dry_run)
+    print(f"Project type: {result.kind}")
+    print(f"Status:       {result.status}")
+    if result.command:
+        print("Command:      " + " ".join(result.command))
+    if result.message:
+        print(f"Message:      {result.message}")
+    return 1 if result.status == "failed" else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+''',
+    'install_dependencies': r'''"""Linux dependency installation and single-file deployment."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import shutil
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+from common import atomic_write_bytes, command_path, format_changes
+from configure_lsp import migrate_legacy_global_lsp
+from detect_env import Environment, detect_environment, print_report
+from project_detection import ProjectInfo, detect_project
+
+
+APT_PACKAGES = {
+    "git": "git",
+    "node": "nodejs",
+    "npm": "npm",
+    "cmake": "cmake",
+    "ninja": "ninja-build",
+    "clangd": "clangd",
+}
+DNF_PACKAGES = {
+    "git": "git",
+    "node": "nodejs",
+    "npm": "npm",
+    "cmake": "cmake",
+    "ninja": "ninja-build",
+    "clangd": "clang-tools-extra",
+}
+
+
+def required_tools(project: ProjectInfo) -> tuple[str, ...]:
+    names = ["git", "node", "npm", "opencode"]
+    if "cpp" in project.languages:
+        names.append("clangd")
+    if "python" in project.languages:
+        names.append("pyright")
+    if project.cmake:
+        names.extend(("cmake", "ninja"))
+    if project.ros2:
+        names.append("colcon")
+    return tuple(dict.fromkeys(names))
+
+
+def missing_tools(environment: Environment, project: ProjectInfo) -> list[str]:
+    return [name for name in required_tools(project) if not environment.tools.get(name)]
+
+
+def _privilege_prefix() -> list[str] | None:
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        return []
+    sudo = command_path("sudo")
+    return [sudo] if sudo else None
+
+
+def _run_system(command: list[str]) -> bool:
+    prefix = _privilege_prefix()
+    if prefix is None:
+        print("Administrator privileges are required; install sudo or run as root.", file=sys.stderr)
+        return False
+    return subprocess.run(prefix + command, check=False).returncode == 0
+
+
+def _install_system_packages(missing: list[str]) -> bool:
+    apt = command_path("apt-get")
+    dnf = command_path("dnf")
+    mapping = APT_PACKAGES if apt else DNF_PACKAGES
+    packages = list(dict.fromkeys(mapping[name] for name in missing if name in mapping))
+    if not packages:
+        return True
+    if apt:
+        return _run_system([apt, "update"]) and _run_system([apt, "install", "-y", *packages])
+    if dnf:
+        return _run_system([dnf, "install", "-y", *packages])
+    print("No supported package manager found; install required tools manually.", file=sys.stderr)
+    return False
+
+
+def _install_npm_packages(missing: list[str]) -> bool:
+    packages: list[str] = []
+    if "opencode" in missing:
+        packages.append("opencode-ai")
+    if "pyright" in missing:
+        packages.append("pyright")
+    if not packages:
+        return True
+    npm = command_path("npm")
+    if not npm:
+        print("npm is required to install " + ", ".join(packages), file=sys.stderr)
+        return False
+    command = [npm, "install", "--global", *packages]
+    completed = subprocess.run(command, check=False)
+    if completed.returncode == 0:
+        return True
+    prefix = _privilege_prefix()
+    if not prefix:
+        return False
+    return subprocess.run(prefix + command, check=False).returncode == 0
+
+
+def install_missing(project: Path, assume_yes: bool, interactive: bool = True) -> tuple[bool, list[str]]:
+    environment = detect_environment()
+    info = detect_project(project)
+    missing = missing_tools(environment, info)
+    installable = [name for name in missing if name != "colcon"]
+    if not installable:
+        return True, missing
+    if not assume_yes:
+        if not interactive or not sys.stdin.isatty():
+            return False, missing
+        answer = input("Install missing dependencies (" + ", ".join(installable) + ")? [y/N] ")
+        if answer.lower() not in {"y", "yes"}:
+            return False, missing
+    if os.name == "nt":
+        print("This deployment artifact supports Linux only.", file=sys.stderr)
+        return False, missing
+    if not _install_system_packages(installable):
+        return False, missing
+    if not _install_npm_packages(installable):
+        return False, missing
+    remaining = missing_tools(detect_environment(), info)
+    return not any(name != "colcon" for name in remaining), missing
+
+
+def _clean_legacy_runtime() -> None:
+    data_root = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")).expanduser().resolve()
+    legacy = data_root / "agentforge"
+    if legacy.parent != data_root or legacy.name != "agentforge":
+        raise RuntimeError(f"Unsafe legacy runtime path: {legacy}")
+    if legacy.is_symlink():
+        print(f"Preserved symbolic link at legacy runtime path: {legacy}", file=sys.stderr)
+        return
+    if not legacy.exists():
+        return
+    known_runtime = (
+        legacy.is_dir()
+        and (legacy / "scripts/agentforge.py").is_file()
+        and (legacy / "templates/agents.md").is_file()
+    )
+    if not known_runtime:
+        print(f"Preserved unrecognized legacy runtime path: {legacy}", file=sys.stderr)
+        return
+    shutil.rmtree(legacy)
+    print(f"Removed recognized legacy AgentForge runtime: {legacy}")
+
+
+def _install_artifact(source: Path) -> Path:
+    bin_root = Path.home() / ".local/bin"
+    bin_root.mkdir(parents=True, exist_ok=True)
+    target = bin_root / "agentforge"
+    atomic_write_bytes(target, source.read_bytes())
+    target.chmod(stat.S_IMODE(target.stat().st_mode) | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return target
+
+
+def install_command(argv: list[str], source: Path) -> int:
+    parser = argparse.ArgumentParser(prog="agentforge install", description="Install the self-contained AgentForge CLI for the current Linux user")
+    parser.add_argument("--yes", "-y", action="store_true")
+    parser.add_argument("--skip-tools", action="store_true")
+    parser.add_argument("--project", default=".")
+    parser.add_argument("--init", nargs="?", const=".")
+    args = parser.parse_args(argv)
+    if os.name == "nt":
+        print("ERROR: the deploy branch supports Linux only.", file=sys.stderr)
+        return 2
+    project = Path(args.project).resolve()
+    if not project.is_dir():
+        print(f"ERROR: project directory does not exist: {project}", file=sys.stderr)
+        return 2
+
+    environment = detect_environment()
+    info = detect_project(project)
+    print_report(environment)
+    print(f"\nProject:     {project}")
+    print(f"Languages:   {', '.join(info.languages) if info.languages else 'none detected'}")
+    missing = missing_tools(environment, info)
+    if missing and not args.skip_tools:
+        installed, _ = install_missing(project, args.yes)
+        if not installed:
+            print("Dependencies were not installed; AgentForge itself will still be installed.", file=sys.stderr)
+
+    target = _install_artifact(source.resolve())
+    _clean_legacy_runtime()
+    changes, warnings = migrate_legacy_global_lsp()
+    print("\nGlobal migration:")
+    print("\n".join(format_changes(changes)))
+    for warning in warnings:
+        print(f"WARNING: {warning}", file=sys.stderr)
+    print(f"\nAgentForge CLI installed: {target}")
+    if str(target.parent) not in os.environ.get("PATH", "").split(os.pathsep):
+        print(f'Add {target.parent} to PATH: export PATH="$HOME/.local/bin:$PATH"')
+
+    if args.init is not None:
+        init_project = Path(args.init).resolve()
+        completed = subprocess.run([sys.executable, str(target), "init", str(init_project)], check=False)
+        return completed.returncode
+    return 0
+''',
+    'verify': r'''#!/usr/bin/env python3
+"""Verify the AgentForge workflow, workers, LSP, and relevant build tools."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+from common import WORKFLOW_BEGIN, WORKFLOW_END, load_json
+from configure_agents import deepseek_auth_source
+from detect_env import Environment, detect_environment
+from project_detection import ProjectInfo, detect_project
+
+
+FREE_MODEL = "opencode/deepseek-v4-flash-free"
+API_MODEL = "deepseek/deepseek-v4-pro"
+
+
+@dataclass(frozen=True)
+class Check:
+    group: str
+    name: str
+    ok: bool
+    detail: str
+    required: bool = True
+
+
+def ready(checks: list[Check]) -> bool:
+    return all(check.ok or not check.required for check in checks)
+
+
+def _agent_has_model(path: Path, model: str) -> bool:
+    try:
+        return f"model: {model}" in path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return False
+
+
+def _model_catalog(environment: Environment) -> set[str]:
+    if not environment.tools["opencode"]:
+        return set()
+    try:
+        completed = subprocess.run(
+            [environment.tools["opencode"], "models"],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    output = completed.stdout.decode("utf-8", errors="replace")
+    return {line.strip() for line in output.splitlines() if "/" in line}
+
+
+def verify_project(
+    project: Path,
+    environment: Environment | None = None,
+    project_info: ProjectInfo | None = None,
+    auth_source: str | None | object = ...,
+    model_catalog: set[str] | None = None,
+) -> list[Check]:
+    project = project.resolve()
+    environment = environment or detect_environment()
+    project_info = project_info or detect_project(project)
+    auth = deepseek_auth_source() if auth_source is ... else auth_source
+    models = _model_catalog(environment) if model_catalog is None else model_catalog
+    checks: list[Check] = []
+
+    opencode = environment.tools["opencode"]
+    checks.append(Check("Runtime", "opencode", bool(opencode), opencode or "not found on PATH"))
+    for name in ("node", "npm", "git"):
+        found = environment.tools[name]
+        checks.append(Check("Runtime", name, bool(found), found or "not found on PATH"))
+
+    agents_md = project / "AGENTS.md"
+    try:
+        workflow = agents_md.read_text(encoding="utf-8-sig")
+        workflow_ok = WORKFLOW_BEGIN in workflow and WORKFLOW_END in workflow
+    except (OSError, UnicodeError):
+        workflow_ok = False
+    checks.append(Check("Agents", "Main Agent", workflow_ok, "inherits current conversation model" if workflow_ok else "workflow block missing"))
+
+    main_doc = project / ".agentforge/main-agent.md"
+    checks.append(Check("Agents", "main-agent policy", main_doc.is_file(), str(main_doc) if main_doc.is_file() else "missing"))
+    free_worker = project / ".opencode/agents/deepseek-worker-free.md"
+    free_ok = _agent_has_model(free_worker, FREE_MODEL) and FREE_MODEL in models
+    free_detail = FREE_MODEL if free_ok else "agent or model unavailable"
+    checks.append(Check("Agents", "deepseek-worker-free", free_ok, free_detail))
+
+    api_worker = project / ".opencode/agents/deepseek-worker.md"
+    if auth:
+        api_ok = _agent_has_model(api_worker, API_MODEL) and API_MODEL in models
+        checks.append(Check("Agents", "deepseek-worker", api_ok, f"configured via {auth}" if api_ok else "authenticated but agent/model unavailable"))
+    else:
+        checks.append(Check("Agents", "deepseek-worker", False, "optional / DeepSeek authentication not configured", required=False))
+
+    config = project / ".opencode/opencode.json"
+    try:
+        data = load_json(config)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        data = {}
+        checks.append(Check("Config", ".opencode/opencode.json", False, str(exc)))
+    else:
+        checks.append(Check("Config", ".opencode/opencode.json", True, str(config)))
+
+    lsp = data.get("lsp", {}) if isinstance(data.get("lsp", {}), dict) else {}
+    if "cpp" in project_info.languages:
+        found = environment.tools["clangd"]
+        checks.append(Check("LSP", "clangd", bool(found) and "clangd" in lsp, found or "tool/config missing"))
+    if "python" in project_info.languages:
+        found = environment.tools["pyright"]
+        checks.append(Check("LSP", "pyright", bool(found) and "pyright" in lsp, found or "tool/config missing"))
+    if not project_info.languages:
+        checks.append(Check("LSP", "language detection", True, "no C/C++ or Python sources detected"))
+
+    if project_info.cmake:
+        for name in ("cmake", "ninja"):
+            found = environment.tools[name]
+            checks.append(Check("Build", name, bool(found), found or "not found on PATH"))
+    if project_info.ros2:
+        found = environment.tools["colcon"]
+        checks.append(Check("Build", "colcon", bool(found), found or "not found on PATH"))
+    return checks
+
+
+def print_report(checks: list[Check]) -> None:
+    current_group = None
+    for check in checks:
+        if check.group != current_group:
+            current_group = check.group
+            print(f"\n{current_group}:")
+        mark = "[OK]" if check.ok else ("[--]" if not check.required else "[!!]")
+        print(f"  {mark} {check.name:<32} {check.detail}")
+    print("\nREADY" if ready(checks) else "\nNOT READY")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("project", nargs="?", default=".")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+    checks = verify_project(Path(args.project))
+    if args.json:
+        print(json.dumps({"ready": ready(checks), "checks": [asdict(c) for c in checks]}, indent=2))
+    else:
+        print_report(checks)
+    return 0 if ready(checks) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+''',
+    'agentforge': r'''#!/usr/bin/env python3
+"""AgentForge command-line interface."""
+
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+from adapt_project import adapt_project
+from common import format_changes
+from configure_agents import configure_agents
+from configure_lsp import configure_lsp
+from detect_env import detect_environment, print_report
+from install_dependencies import install_missing, missing_tools, required_tools
+from project_detection import detect_project
+from verify import print_report as print_verify_report
+from verify import ready, verify_project
+
+
+def command_init(args: argparse.Namespace) -> int:
+    project = Path(args.project).resolve()
+    if not project.is_dir():
+        print(f"ERROR: project directory does not exist: {project}", file=sys.stderr)
+        return 2
+
+    environment = detect_environment()
+    project_info = detect_project(project)
+    print("AgentForge")
+    print(f"Environment: {environment.mode} / {environment.architecture}")
+    print(f"Project:     {project}")
+    print(f"Languages:   {', '.join(project_info.languages) if project_info.languages else 'none detected'}")
+    print("\nTools:")
+    for name in required_tools(project_info):
+        found = environment.tools.get(name)
+        print(f"  {'[OK]' if found else '[--]'} {name:<10} {found or 'missing'}")
+    missing = missing_tools(environment, project_info)
+    if missing:
+        print("Missing:     " + ", ".join(missing))
+        if args.dry_run:
+            print("Dry run: dependencies will not be installed.")
+        elif not args.skip_install:
+            installed, _ = install_missing(project, args.yes)
+            if not installed:
+                print("Dependencies were not installed; configuration will continue.")
+
+    agent_changes, agent_warnings, auth_source = configure_agents(project, args.dry_run)
+    lsp_changes, lsp_warnings = configure_lsp(project, args.dry_run, project_info.languages)
+    print("\nConfiguration:")
+    print("\n".join(format_changes(agent_changes + lsp_changes)))
+    print("\nAgents:")
+    print("  [OK] Main Agent             current conversation model")
+    print("  [OK] deepseek-worker-free   opencode/deepseek-v4-flash-free")
+    if auth_source:
+        print(f"  [OK] deepseek-worker        deepseek/deepseek-v4-pro ({auth_source})")
+    else:
+        print("  [--] deepseek-worker        optional / DeepSeek authentication not configured")
+
+    if (project_info.cmake or project_info.ros2) and not (project / "compile_commands.json").is_file():
+        print("\nProject preparation is available; run: agentforge prepare")
+
+    warnings = agent_warnings + lsp_warnings
+    for warning in warnings:
+        print(f"WARNING: {warning}", file=sys.stderr)
+    if args.dry_run:
+        print("\nDry run complete; no files were written.")
+    elif not warnings:
+        print("\nAgentForge initialization complete.")
+    return 1 if warnings else 0
+
+
+def command_prepare(args: argparse.Namespace) -> int:
+    project = Path(args.project).resolve()
+    if not project.is_dir():
+        print(f"ERROR: project directory does not exist: {project}", file=sys.stderr)
+        return 2
+    result = adapt_project(project, args.dry_run)
+    print(f"Project type: {result.kind}")
+    print(f"Status:       {result.status}")
+    if result.command:
+        print("Command:      " + " ".join(result.command))
+    if result.message:
+        print(f"Message:      {result.message}")
+    return 1 if result.status == "failed" else 0
+
+
+def command_verify(args: argparse.Namespace) -> int:
+    checks = verify_project(Path(args.project))
+    print_verify_report(checks)
+    return 0 if ready(checks) else 1
+
+
+def command_doctor(args: argparse.Namespace) -> int:
+    print_report(detect_environment())
+    project = Path(args.project).resolve()
+    if project.is_dir():
+        info = detect_project(project)
+        print("\nProject:")
+        print(f"  Root:      {info.root}")
+        print(f"  Languages: {', '.join(info.languages) if info.languages else 'none detected'}")
+        print(f"  CMake:     {'yes' if info.cmake else 'no'}")
+        print(f"  ROS 2:     {'yes' if info.ros2 else 'no'}")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="agentforge", description="OpenCode hierarchical multi-agent workflow initializer")
+    parser.add_argument("--version", action="version", version="AgentForge 0.2.0")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    init_parser = subparsers.add_parser("init", help="initialize project configuration without building")
+    init_parser.add_argument("project", nargs="?", default=".")
+    init_parser.add_argument("--dry-run", action="store_true")
+    init_parser.add_argument("--yes", "-y", action="store_true", help="install missing dependencies without prompting")
+    init_parser.add_argument("--skip-install", action="store_true", help="do not offer dependency installation")
+    init_parser.add_argument("--skip-build", action="store_true", help=argparse.SUPPRESS)
+    init_parser.set_defaults(handler=command_init)
+
+    prepare_parser = subparsers.add_parser("prepare", help="generate compile database and index inputs")
+    prepare_parser.add_argument("project", nargs="?", default=".")
+    prepare_parser.add_argument("--dry-run", action="store_true")
+    prepare_parser.set_defaults(handler=command_prepare)
+
+    verify_parser = subparsers.add_parser("verify", help="verify workflow, workers, LSP, and tools")
+    verify_parser.add_argument("project", nargs="?", default=".")
+    verify_parser.set_defaults(handler=command_verify)
+
+    doctor_parser = subparsers.add_parser("doctor", help="report host and project environment")
+    doctor_parser.add_argument("project", nargs="?", default=".")
+    doctor_parser.set_defaults(handler=command_doctor)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    return args.handler(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+''',
+}
+
+def _load_embedded_module(name: str) -> None:
+    module = types.ModuleType(name)
+    module.__file__ = f"{Path(__file__).resolve()}::{name}.py"
+    module.__package__ = ""
+    if name == "common":
+        module.__dict__["_EMBEDDED_TEMPLATES"] = EMBEDDED_TEMPLATES
+    sys.modules[name] = module
+    exec(compile(EMBEDDED_MODULES[name], module.__file__, "exec"), module.__dict__)
+
+
+for _module_name in EMBEDDED_MODULES:
+    _load_embedded_module(_module_name)
+
+
+def _main() -> int:
+    if len(sys.argv) > 1 and sys.argv[1] == "install":
+        from install_dependencies import install_command
+
+        return install_command(sys.argv[2:], Path(__file__))
+    from agentforge import main
+
+    return main()
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())

@@ -1,10 +1,2 @@
-* text=auto
-
-# Keep POSIX launchers executable by Linux shells after a Windows checkout.
 agentforge text eol=lf
-*.sh text eol=lf
-*.py text eol=lf
-
-# Keep native Windows launchers in their conventional format.
-*.cmd text eol=crlf
-*.ps1 text eol=crlf
+install.sh text eol=lf

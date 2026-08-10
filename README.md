@@ -1,82 +1,220 @@
-# AgentForge
+# AgentForge Linux Deployment
 
 **English** | [简体中文](README.zh-CN.md)
 
-AgentForge is an OpenCode multi-agent workflow initializer. It is not an IDE and it is not a new AI coding agent.
+This branch is the minimal Linux deployment package for AgentForge. All CLI, project detection, Agent/LSP configuration, migration, dependency installation, CMake/ROS 2 preparation, verification, and embedded templates are contained in the single executable `agentforge` file.
 
-Its core principle is simple:
+The repository contains only:
 
 ```text
-Capable model: think, plan, decide
-Cheap worker:  search, edit, build, test
+.gitattributes
+LICENSE
+README.md
+README.zh-CN.md
+agentforge
+install.sh
 ```
 
-The model selected by the current OpenCode conversation remains the Main Agent. AgentForge does not pin it to GPT, Claude, Gemini, or any other provider. The Main Agent keeps architecture and final decisions, delegates bounded execution work to DeepSeek workers, and reviews their results.
+`install.sh` is a small bootstrap for machines that do not yet have Python 3.9 or newer. After Python is available, it delegates installation to the self-contained `agentforge` script.
+
+## Architecture
 
 ```text
-User -> Main Agent (current conversation model)
+User -> Main Agent (current OpenCode conversation model)
              |
-             +--> deepseek-worker-free (default)
+             +--> deepseek-worker-free (default subagent)
              |    opencode/deepseek-v4-flash-free
              |
-             +--> deepseek-worker (optional)
+             `--> deepseek-worker (optional subagent)
                   deepseek/deepseek-v4-pro
-             |
-             v
-        Code / Shell / Test -> Main Agent review
 ```
 
-## What gets configured
+The Main Agent keeps context, architecture, planning, dispatch, review, and final decisions. Workers execute bounded tasks.
 
-- A managed workflow block in `AGENTS.md`
-- A model-independent Main Agent policy
-- `deepseek-worker-free` as an OpenCode subagent
-- Optional `deepseek-worker` when DeepSeek authentication exists
-- clangd only when C/C++ sources are detected
-- pyright only when Python sources are detected
-- VS Code language and Remote SSH recommendations
-- Safe, additive OpenCode JSON merging
-- CMake and ROS 2 compilation-database preparation
-
-Agent markdown uses OpenCode's project-local `.opencode/agents/` format. Worker model IDs are taken from the current OpenCode/Models.dev catalog rather than invented configuration fields.
-
-## Linux deployment
-
-The CLI requires Python 3.9 or newer. The installer detects existing tools and installs only missing components. API keys are never requested, printed, or written by AgentForge.
+## 1. Install once on each Linux machine
 
 ```sh
 git clone --branch deploy --single-branch https://github.com/Justinchan99/AgentForge.git
 cd AgentForge
-chmod +x install.sh
+chmod +x install.sh agentforge
 ./install.sh
+```
 
+Use `--yes` to allow installation of missing dependencies without prompting:
+
+```sh
+./install.sh --yes
+```
+
+Use `--skip-tools` when Python 3.9+ and all other dependencies are managed separately:
+
+```sh
+./install.sh --skip-tools
+```
+
+The installed command is:
+
+```text
+~/.local/bin/agentforge
+```
+
+No separate AgentForge runtime directory is required. Upgrading removes the legacy `~/.local/share/agentforge` runtime safely after the new single-file command is installed.
+
+If the current Shell cannot find the command:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Add that export to `~/.bashrc` or `~/.zshrc` to make it persistent.
+
+Confirm installation:
+
+```sh
+agentforge --version
+agentforge doctor
+```
+
+## 2. Initialize every project
+
+AgentForge is installed once per Linux user, but every project must be initialized separately.
+
+```sh
+cd /path/to/project
+agentforge init --dry-run
+agentforge init --yes
+agentforge verify
+```
+
+- `--dry-run` previews changes without writing files or installing dependencies.
+- `--yes` permits installation of missing relevant tools.
+- `--skip-install` configures the project without offering dependency installation.
+- Re-running `init` is safe and idempotent.
+
+Initialization creates or updates:
+
+```text
+project/
+|-- AGENTS.md
+|-- .gitignore
+|-- .agentforge/
+|   |-- .gitignore
+|   |-- main-agent.md
+|   |-- deepseek-worker-free.md
+|   `-- deepseek-worker.md
+|-- .opencode/
+|   |-- opencode.json
+|   `-- agents/
+|       |-- deepseek-worker-free.md
+|       `-- deepseek-worker.md      # only with DeepSeek authentication
+`-- .vscode/
+    |-- settings.json
+    `-- extensions.json
+```
+
+## 3. Start OpenCode and use workers
+
+Start OpenCode with the initialized project as its project context:
+
+```sh
+cd /path/to/project
+opencode
+```
+
+or:
+
+```sh
+opencode /path/to/project
+```
+
+Check the loaded agents:
+
+```sh
+opencode agent list
+```
+
+The output should include `deepseek-worker-free (subagent)`. The current conversation model is the Main Agent, so no separate `main-agent` entry is expected.
+
+Subagents do not appear in the Tab list of primary agents. The Main Agent can dispatch them automatically, or you can invoke one directly:
+
+```text
+@deepseek-worker-free search for the configuration loader and report its call path
+```
+
+The default worker may edit project files, asks before running Shell commands, cannot create more agents, and cannot access files outside the project.
+
+## 4. Enable the optional DeepSeek worker
+
+The free worker does not require a user-provided DeepSeek key. The real `.opencode/agents/deepseek-worker.md` worker is created or enabled only after authentication.
+
+Preferred OpenCode flow:
+
+```text
+/connect
+```
+
+Select DeepSeek, complete authentication, then run:
+
+```sh
+agentforge init
+agentforge verify
+```
+
+Alternatively, provide the key only through the current Shell environment:
+
+```sh
+export DEEPSEEK_API_KEY="..."
+agentforge init
+```
+
+Never write API keys into project files or commit them to Git.
+
+## 5. CMake and ROS 2
+
+`init` detects and configures; it never starts a large build. Generate compilation-database inputs explicitly:
+
+```sh
+agentforge prepare
+```
+
+An existing root `compile_commands.json` is preserved. ROS 2 environments must be sourced first so `colcon` is available.
+
+## 6. Verify and diagnose
+
+```sh
+agentforge verify
+agentforge doctor
+```
+
+`READY` verifies required tools, Agent policies, configured workers, project configuration, model catalog entry, and relevant LSP. It does not mean a worker has completed a real task or that the project has built and passed its tests.
+
+Run a small Worker smoke task after `READY`:
+
+```text
+@deepseek-worker-free list the top-level project structure without changing files
+```
+
+The optional `deepseek-worker` may remain unavailable without making verification fail.
+
+## 7. Update
+
+```sh
+cd /path/to/AgentForge
+git pull
+./install.sh
+```
+
+Then update every initialized project:
+
+```sh
 cd /path/to/project
 agentforge init
 agentforge verify
 ```
 
-Ubuntu/Debian (`apt-get`) and Fedora-family (`dnf`) package managers are supported. Both x86_64 and ARM64 are detected; actual package availability remains distribution-specific.
+## Remote SSH
 
-### Remote SSH Linux
-
-Install and run AgentForge in the remote Linux terminal where the source code lives:
-
-```sh
-# VS Code Remote SSH terminal on the Linux host
-git clone --branch deploy --single-branch https://github.com/Justinchan99/AgentForge.git
-cd AgentForge
-./install.sh
-
-cd /remote/path/to/project
-agentforge init
-agentforge verify
-```
-
-OpenCode, workers, clangd/pyright, builds, tests, and the codebase stay on Linux. Windows provides the VS Code UI, Remote SSH, Git UI, and user interaction. Do not use Windows clangd for a remote Linux checkout.
-
-## Usage guide
-
-See the [English usage guide](docs/usage.md) or [中文使用说明](docs/usage.zh-CN.md) for project initialization, OpenCode worker invocation, optional DeepSeek authentication, verification, updates, and troubleshooting.
+When source code is on a remote Linux host, run AgentForge, OpenCode, language servers, builds, and tests on that host through the VS Code Remote SSH terminal. Do not initialize a Windows directory that merely displays remote files.
 
 ## Commands
 
@@ -87,95 +225,22 @@ agentforge verify [project]
 agentforge doctor [project]
 ```
 
-- `init` detects the project, offers to install missing relevant dependencies, safely configures agents/LSP, and never builds the project.
-- `prepare` configures CMake or runs the requested ROS 2 preparation to produce compilation-database inputs.
-- `verify` checks OpenCode, Main Agent policy, workers, relevant LSP, build tools, and the AGENTS block.
-- `doctor` prints detailed host, mode, architecture, tools, languages, CMake, and ROS 2 detection.
+## Safety
 
-`init --dry-run` neither writes files nor installs tools.
-
-## Agent behavior
-
-### Main Agent
-
-The Main Agent is not a separate pinned model. The current conversation model reads the injected workflow and owns:
-
-- requirements and conversation context
-- reasoning, architecture, and planning
-- task decomposition and worker selection
-- worker result review, retries, and final decisions
-
-### deepseek-worker-free
-
-Always configured as a visible `mode: subagent` using:
-
-```yaml
-model: opencode/deepseek-v4-flash-free
-```
-
-Use it for search, small changes, repetitive edits, tests, builds, logs, and simple debugging.
-
-### deepseek-worker
-
-Configured in `.opencode/agents/` only when AgentForge detects `DEEPSEEK_API_KEY` or an existing DeepSeek credential in `opencode auth list`:
-
-```yaml
-model: deepseek/deepseek-v4-pro
-```
-
-Authenticate securely with OpenCode's `/connect` flow, or set `DEEPSEEK_API_KEY` in the shell before `agentforge init`. If authentication is absent, initialization still succeeds and reports the API worker as optional/unavailable.
-
-Never commit API keys. AgentForge adds ignore rules for local AgentForge secret files and `*.agentforge.bak` configuration backups.
-
-## Generated files
-
-```text
-project/
-├── AGENTS.md
-├── .gitignore
-├── .agentforge/
-│   ├── .gitignore
-│   ├── main-agent.md
-│   ├── deepseek-worker-free.md
-│   └── deepseek-worker.md
-├── .opencode/
-│   ├── opencode.json
-│   └── agents/
-│       ├── deepseek-worker-free.md
-│       └── deepseek-worker.md      # only with DeepSeek auth
-└── .vscode/
-    ├── settings.json
-    └── extensions.json
-```
-
-`.agentforge/` contains portable policy templates. `.opencode/agents/` is the directory OpenCode actually loads.
-
-## Safety and idempotency
-
-- Existing `AGENTS.md` content is preserved byte-for-byte outside `<!-- AGENTFORGE:BEGIN -->` / `<!-- AGENTFORGE:END -->`.
-- Future updates replace only that owned block.
-- Existing JSON values always win; AgentForge only adds missing values.
-- A conflict creates a one-time `*.agentforge.bak` before merging.
+- Existing content outside the managed `AGENTS.md` block is preserved.
+- Existing JSON values win; AgentForge only adds missing values.
+- JSON conflicts create a one-time `*.agentforge.bak` safety backup.
 - Invalid JSON and non-UTF-8 files are reported and left unchanged.
-- Worker/API templates contain model IDs, never credentials.
-- `init` does not build, delete, commit, push, or modify source code.
-- Repeated initialization is idempotent.
+- Legacy AgentForge roles and global LSP configuration are migrated only when they exactly match known generated content.
+- `init` does not build, delete, commit, push, or modify project source code.
+- Worker templates contain model IDs, never credentials.
 
-## CMake and ROS 2
+## Common issues
 
-`agentforge init` only detects and configures. It does not start a large build.
-
-For CMake projects:
-
-```sh
-agentforge prepare
-```
-
-This performs a CMake configure under `.agentforge/cmake-build` with `CMAKE_EXPORT_COMPILE_COMMANDS=ON`. For ROS 2, `prepare` uses managed colcon build/install/log directories and combines package compilation databases under `.agentforge`.
-
-If a project already has a root `compile_commands.json`, AgentForge preserves and uses it.
-
-See [usage](docs/usage.md), [architecture](docs/architecture.md), [Linux](docs/linux.md), and [Remote SSH](docs/remote-ssh.md) for details.
+- Worker missing from Tab: expected for `mode: subagent`; use `@deepseek-worker-free` or automatic Main Agent dispatch.
+- Optional worker missing: authenticate DeepSeek and re-run `agentforge init`.
+- clangd or pyright missing: LSP configuration is language-selective; inspect detection with `agentforge doctor`.
+- Worker absent after initialization: restart OpenCode with the initialized project as its project context and run `opencode agent list`.
 
 ## License
 
