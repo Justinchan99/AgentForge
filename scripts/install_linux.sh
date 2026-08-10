@@ -129,6 +129,22 @@ mkdir -p "$install_root" "$bin_root"
 
 source_path=$(CDPATH= cd -- "$SOURCE_ROOT" && pwd)
 install_path=$(CDPATH= cd -- "$install_root" && pwd)
+user_path=$(CDPATH= cd -- "$user_dir" && pwd)
+data_path=$(CDPATH= cd -- "$data_root" && pwd)
+case "$install_path" in
+    ""|/|"$user_path"|"$data_path")
+        echo "Refusing to clean unsafe AgentForge install path: $install_path" >&2
+        exit 1
+        ;;
+esac
+
+# Remove files copied by older cross-platform packages but excluded from this
+# Linux-only deployment. All targets are fixed children of install_root.
+for stale_file in install.ps1 agentforge.cmd scripts/install_windows.ps1 docs/windows.md; do
+    rm -f -- "$install_root/$stale_file"
+done
+rm -rf -- "$install_root/examples"
+
 if [ "$source_path" != "$install_path" ]; then
     for item in install.sh agentforge README.md LICENSE scripts templates docs; do
         if [ -e "$SOURCE_ROOT/$item" ]; then

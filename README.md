@@ -43,7 +43,7 @@ Agent markdown uses OpenCode's project-local `.opencode/agents/` format. Worker 
 The CLI requires Python 3.9 or newer. The installer detects existing tools and installs only missing components. API keys are never requested, printed, or written by AgentForge.
 
 ```sh
-git clone <agentforge-repository>
+git clone --branch deploy --single-branch <agentforge-repository>
 cd AgentForge
 chmod +x install.sh
 ./install.sh
@@ -61,7 +61,7 @@ Install and run AgentForge in the remote Linux terminal where the source code li
 
 ```sh
 # VS Code Remote SSH terminal on the Linux host
-git clone <agentforge-repository>
+git clone --branch deploy --single-branch <agentforge-repository>
 cd AgentForge
 ./install.sh
 
