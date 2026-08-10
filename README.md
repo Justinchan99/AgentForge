@@ -47,7 +47,7 @@ The CLI requires Python 3.9 or newer. Installers detect existing tools and insta
 ### Windows local
 
 ```powershell
-git clone <agentforge-repository>
+git clone https://github.com/Justinchan99/AgentForge.git
 cd AgentForge
 .\install.ps1
 
@@ -63,7 +63,7 @@ When running directly from the AgentForge source checkout before installation, u
 ### Linux local
 
 ```sh
-git clone <agentforge-repository>
+git clone https://github.com/Justinchan99/AgentForge.git
 cd AgentForge
 chmod +x install.sh
 ./install.sh
@@ -81,7 +81,7 @@ Install and run AgentForge in the remote Linux terminal where the source code li
 
 ```sh
 # VS Code Remote SSH terminal on the Linux host
-git clone <agentforge-repository>
+git clone https://github.com/Justinchan99/AgentForge.git
 cd AgentForge
 ./install.sh
 
@@ -91,6 +91,10 @@ agentforge verify
 ```
 
 OpenCode, workers, clangd/pyright, builds, tests, and the codebase stay on Linux. Windows provides the VS Code UI, Remote SSH, Git UI, and user interaction. Do not use Windows clangd for a remote Linux checkout.
+
+## Usage guide
+
+See the [English usage guide](docs/usage.md) or [中文使用说明](docs/usage.zh-CN.md) for the complete workflow after installation, including project initialization, OpenCode worker invocation, optional DeepSeek authentication, verification, and troubleshooting.
 
 ## Commands
 
@@ -197,7 +201,7 @@ python scripts\agentforge.py init --dry-run
 python scripts\agentforge.py verify
 ```
 
-See [architecture](docs/architecture.md), [Windows](docs/windows.md), [Linux](docs/linux.md), and [Remote SSH](docs/remote-ssh.md) for details.
+See [usage](docs/usage.md), [architecture](docs/architecture.md), [Windows](docs/windows.md), [Linux](docs/linux.md), and [Remote SSH](docs/remote-ssh.md) for details.
 
 ## License
 

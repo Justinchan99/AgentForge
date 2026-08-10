@@ -47,7 +47,7 @@ CLI 要求 Python 3.9 或更高版本。安装器会检测现有工具，只安�
 ### Windows 本地开发
 
 ```powershell
-git clone <agentforge-repository>
+git clone https://github.com/Justinchan99/AgentForge.git
 cd AgentForge
 .\install.ps1
 
@@ -63,7 +63,7 @@ agentforge verify
 ### Linux 本地开发
 
 ```sh
-git clone <agentforge-repository>
+git clone https://github.com/Justinchan99/AgentForge.git
 cd AgentForge
 chmod +x install.sh
 ./install.sh
@@ -81,7 +81,7 @@ agentforge verify
 
 ```sh
 # Linux 主机上的 VS Code Remote SSH 终端
-git clone <agentforge-repository>
+git clone https://github.com/Justinchan99/AgentForge.git
 cd AgentForge
 ./install.sh
 
@@ -91,6 +91,10 @@ agentforge verify
 ```
 
 OpenCode、Worker、clangd/pyright、构建、测试和代码库均位于 Linux。Windows 负责 VS Code 界面、Remote SSH、Git 界面和用户交互。不要使用 Windows 本机的 clangd 分析远程 Linux 工程。
+
+## 使用说明
+
+安装后的完整操作流程请参阅[中文使用说明](docs/usage.zh-CN.md)或[英文使用说明](docs/usage.md)，其中包括工程初始化、OpenCode Worker 调用、可选 DeepSeek 认证、验证与故障排查。
 
 ## 命令
 
@@ -197,7 +201,7 @@ python scripts\agentforge.py init --dry-run
 python scripts\agentforge.py verify
 ```
 
-更多信息请参阅[架构说明](docs/architecture.md)、[Windows](docs/windows.md)、[Linux](docs/linux.md)和[Remote SSH](docs/remote-ssh.md)。
+更多信息请参阅[使用说明](docs/usage.zh-CN.md)、[架构说明](docs/architecture.md)、[Windows](docs/windows.md)、[Linux](docs/linux.md)和[Remote SSH](docs/remote-ssh.md)。
 
 ## 许可证
 
