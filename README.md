@@ -1,5 +1,7 @@
 # AgentForge
 
+**English** | [简体中文](README.zh-CN.md)
+
 AgentForge is an OpenCode multi-agent workflow initializer. It is not an IDE and it is not a new AI coding agent.
 
 Its core principle is simple:
